@@ -10,6 +10,7 @@ from datetime import datetime
 
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
+from protocols.web_terminal import WebTerminalManager
 
 logger = logging.getLogger("netmaster.ui")
 
@@ -25,6 +26,7 @@ def create_app(netmaster_app=None):
                 static_folder=str(STATIC_DIR))
     app.config["SECRET_KEY"] = os.environ.get("NETMASTER_SECRET", os.urandom(24).hex())
     socketio = SocketIO(app, cors_allowed_origins="*")
+    app.terminal_manager = WebTerminalManager()
 
     # 메인 앱 참조
     app.netmaster = netmaster_app
@@ -140,6 +142,73 @@ def create_app(netmaster_app=None):
         if app.netmaster and target:
             result = app.netmaster.ping(target, count=1)
             emit("ping_result", result)
+
+    # ── Web Terminal Events ────────────────────────
+
+    @socketio.on("terminal_connect")
+    def ws_terminal_connect(data):
+        """웹 터미널 세션 연결"""
+        protocol = data.get("protocol", "ssh")
+        host = data.get("host", "")
+        port = int(data.get("port", 22 if protocol == "ssh" else 23))
+        username = data.get("username", "")
+        password = data.get("password", None)
+        key_file = data.get("key_file", None)
+
+        if not host or not username:
+            emit("terminal_error", {"error": "Host and username are required"})
+            return
+
+        try:
+            mgr = app.terminal_manager
+            if protocol == "telnet":
+                session_id = mgr.create_telnet_session(host, port, username, password)
+            else:
+                session_id = mgr.create_ssh_session(host, port, username, password, key_file)
+
+            def on_output(sid, data):
+                emit("terminal_output", {
+                    "session_id": sid,
+                    "data": data.decode("utf-8", errors="replace"),
+                })
+
+            def on_disconnect(sid):
+                emit("terminal_disconnected", {"session_id": sid})
+
+            mgr.set_output_callback(session_id, on_output)
+            mgr.set_disconnect_callback(session_id, on_disconnect)
+
+            emit("terminal_connected", {"session_id": session_id})
+            logger.info(f"Terminal connected: {protocol} {username}@{host}:{port}")
+
+        except Exception as e:
+            logger.error(f"Terminal connect error: {e}")
+            emit("terminal_error", {"error": str(e)})
+
+    @socketio.on("terminal_input")
+    def ws_terminal_input(data):
+        """웹 터미널 입력 전달"""
+        session_id = data.get("session_id", "")
+        input_data = data.get("data", "")
+        if app.terminal_manager.is_valid(session_id) and input_data:
+            app.terminal_manager.write(session_id, input_data.encode("utf-8"))
+
+    @socketio.on("terminal_resize")
+    def ws_terminal_resize(data):
+        """웹 터미널 크기 변경"""
+        session_id = data.get("session_id", "")
+        cols = int(data.get("cols", 80))
+        rows = int(data.get("rows", 24))
+        if app.terminal_manager.is_valid(session_id):
+            app.terminal_manager.resize(session_id, cols, rows)
+
+    @socketio.on("terminal_disconnect")
+    def ws_terminal_disconnect(data):
+        """웹 터미널 세션 종료"""
+        session_id = data.get("session_id", "")
+        app.terminal_manager.disconnect(session_id)
+        emit("terminal_disconnected", {"session_id": session_id})
+        logger.info(f"Terminal disconnected: {session_id}")
 
     return app
 

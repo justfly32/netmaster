@@ -6,6 +6,9 @@
     <title>NetMaster — Network Management Dashboard</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://cdn.socket.io/4.7.0/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0e17; color: #e0e6ed; }
@@ -61,6 +64,13 @@
         .badge.router { color: #f0883e; background: #f0883e22; }
         .badge.switch { color: #a371f7; background: #a371f722; }
 
+        /* Terminal */
+        #terminal-container { width: 100%; height: calc(100vh - 260px); min-height: 300px; background: #000; border-radius: 0 0 6px 6px; overflow: hidden; }
+        .terminal-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #1a1f35; border: 1px solid #30363d; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 12px; color: #8b949e; }
+        .terminal-bar .session-info { flex: 1; }
+        .term-input-grid { display: grid; grid-template-columns: 1fr 2fr 1fr 2fr; gap: 8px; margin-bottom: 8px; }
+        .term-input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
         /* Stats Grid */
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
         .stat-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; text-align: center; }
@@ -90,7 +100,7 @@
         <button onclick="showPanel('ping')">📡 Ping/Trace</button>
         <button onclick="showPanel('dns')">🌐 DNS</button>
         <button onclick="showPanel('snmp')">📋 SNMP</button>
-        <button onclick="showPanel('ssh')">🔐 SSH/Telnet</button>
+        <button onclick="showPanel('terminal')">🔐 SSH/Telnet</button>
     </div>
 
     <div class="main">
@@ -227,23 +237,33 @@
                 </div>
             </div>
 
-            <!-- SSH Panel -->
-            <div id="panel-ssh" class="panel">
+            <!-- Terminal Panel -->
+            <div id="panel-terminal" class="panel">
                 <div class="card">
-                    <h4>🔐 SSH / Telnet</h4>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
-                        <input type="text" id="ssh-host" placeholder="호스트/IP">
-                        <input type="text" id="ssh-user" placeholder="사용자명" value="root">
-                        <input type="password" id="ssh-pass" placeholder="비밀번호">
-                        <input type="number" id="ssh-port" value="23" placeholder="포트 (22=SSH, 23=Telnet)">
+                    <h4>💻 웹 터미널</h4>
+                    <div id="terminal-connect-form">
+                        <div class="term-input-grid">
+                            <select id="term-protocol">
+                                <option value="ssh">SSH</option>
+                                <option value="telnet">Telnet</option>
+                            </select>
+                            <input type="text" id="term-host" placeholder="호스트/IP">
+                            <input type="number" id="term-port" value="22" placeholder="Port">
+                            <input type="text" id="term-user" placeholder="사용자명">
+                        </div>
+                        <div class="term-input-row">
+                            <input type="password" id="term-pass" placeholder="비밀번호">
+                            <button onclick="terminalConnect()">🔗 연결</button>
+                        </div>
+                        <div id="term-error" style="color:#da3633;font-size:13px;margin-top:8px;display:none"></div>
                     </div>
-                    <div class="form-group">
-                        <label>실행할 명령</label>
-                        <input type="text" id="ssh-cmd" value="uname -a" placeholder="uname -a">
+                    <div id="terminal-session-area" style="display:none">
+                        <div class="terminal-bar">
+                            <span class="session-info" id="term-session-info">연결됨</span>
+                            <button onclick="terminalDisconnect()" style="background:#da3633;color:white;border:none;border-radius:4px;padding:4px 12px;cursor:pointer">🔒 종료</button>
+                        </div>
+                        <div id="terminal-container"></div>
                     </div>
-                    <button onclick="doSSH()">SSH 실행</button>
-                    <button class="secondary" onclick="doTelnet()" style="margin-left:8px">Telnet 실행</button>
-                    <div class="result-output" id="ssh-result" style="margin-top:12px">결과가 여기에 표시됩니다</div>
                 </div>
             </div>
 
@@ -332,33 +352,6 @@
             el.textContent = '쿼리 중...';
             try {
                 const res = await apiPost('/snmp', {host, oid, community});
-                el.textContent = JSON.stringify(res, null, 2);
-            } catch (e) { el.textContent = '오류: ' + e; }
-        }
-
-        // SSH
-        async function doSSH() {
-            const host = document.getElementById('ssh-host').value;
-            const username = document.getElementById('ssh-user').value;
-            const password = document.getElementById('ssh-pass').value;
-            const port = parseInt(document.getElementById('ssh-port').value);
-            const command = document.getElementById('ssh-cmd').value;
-            const el = document.getElementById('ssh-result');
-            el.textContent = '연결 중...';
-            try {
-                const res = await apiPost('/ssh', {host, username, password, port, command});
-                el.textContent = JSON.stringify(res, null, 2);
-            } catch (e) { el.textContent = '오류: ' + e; }
-        }
-
-        // Telnet
-        async function doTelnet() {
-            const host = document.getElementById('ssh-host').value;
-            const port = parseInt(document.getElementById('ssh-port').value) || 23;
-            const el = document.getElementById('ssh-result');
-            el.textContent = '연결 중...';
-            try {
-                const res = await apiPost('/ssh', {host, username: '', port, command: ''});
                 el.textContent = JSON.stringify(res, null, 2);
             } catch (e) { el.textContent = '오류: ' + e; }
         }
@@ -474,6 +467,117 @@
                 node.attr('transform', d => `translate(${d.x},${d.y})`);
             });
         }
+
+        // ─── Terminal ───────────────────────────────
+        let term = null;
+        let termFit = null;
+        let termSessionId = null;
+
+        function terminalConnect() {
+            const protocol = document.getElementById('term-protocol').value;
+            const host = document.getElementById('term-host').value;
+            const port = parseInt(document.getElementById('term-port').value);
+            const username = document.getElementById('term-user').value;
+            const password = document.getElementById('term-pass').value;
+
+            if (!host || !username) {
+                showTermError('호스트와 사용자명을 입력하세요');
+                return;
+            }
+            document.getElementById('term-error').style.display = 'none';
+            socket.emit('terminal_connect', { protocol, host, port, username, password });
+        }
+
+        socket.on('terminal_connected', (data) => {
+            termSessionId = data.session_id;
+            document.getElementById('terminal-connect-form').style.display = 'none';
+            document.getElementById('terminal-session-area').style.display = 'block';
+
+            const container = document.getElementById('terminal-container');
+            container.innerHTML = '';
+            term = new Terminal({
+                cursorBlink: true,
+                cursorStyle: 'block',
+                fontSize: 13,
+                fontFamily: 'Menlo, Monaco, "Fira Code", monospace',
+                theme: {
+                    background: '#0d1117', foreground: '#e0e6ed', cursor: '#58a6ff',
+                    selectionBackground: '#58a6ff44', black: '#0d1117', red: '#da3633',
+                    green: '#7ee787', yellow: '#d29922', blue: '#58a6ff',
+                    magenta: '#a371f7', cyan: '#39c5cf', white: '#e0e6ed',
+                    brightBlack: '#484f58', brightRed: '#ff7b72', brightGreen: '#7ee787',
+                    brightYellow: '#d29922', brightBlue: '#58a6ff', brightMagenta: '#a371f7',
+                    brightCyan: '#39c5cf', brightWhite: '#f0f6fc',
+                },
+            });
+            termFit = new FitAddon.FitAddon();
+            term.loadAddon(termFit);
+            term.open(container);
+            termFit.fit();
+
+            term.onData((d) => {
+                if (termSessionId) {
+                    socket.emit('terminal_input', { session_id: termSessionId, data: d });
+                }
+            });
+            term.onResize(({ cols, rows }) => {
+                if (termSessionId) {
+                    socket.emit('terminal_resize', { session_id: termSessionId, cols, rows });
+                }
+            });
+
+            const proto = document.getElementById('term-protocol').value;
+            const host = document.getElementById('term-host').value;
+            const user = document.getElementById('term-user').value;
+            document.getElementById('term-session-info').textContent = `${proto.toUpperCase()} — ${user}@${host}`;
+            term.focus();
+        });
+
+        socket.on('terminal_output', (data) => {
+            if (term && data.session_id === termSessionId) {
+                term.write(data.data);
+            }
+        });
+
+        socket.on('terminal_error', (data) => {
+            showTermError(data.error);
+        });
+
+        socket.on('terminal_disconnected', (data) => {
+            if (data.session_id === termSessionId) {
+                terminalCleanup();
+            }
+        });
+
+        function terminalDisconnect() {
+            if (termSessionId) {
+                socket.emit('terminal_disconnect', { session_id: termSessionId });
+            }
+            terminalCleanup();
+        }
+
+        function terminalCleanup() {
+            if (term) {
+                term.dispose();
+                term = null;
+                termFit = null;
+            }
+            termSessionId = null;
+            document.getElementById('terminal-connect-form').style.display = 'block';
+            document.getElementById('terminal-session-area').style.display = 'none';
+        }
+
+        function showTermError(msg) {
+            const el = document.getElementById('term-error');
+            el.textContent = '❌ ' + msg;
+            el.style.display = 'block';
+        }
+
+        window.addEventListener('resize', () => {
+            if (term && termFit) {
+                setTimeout(() => termFit.fit(), 50);
+            }
+        });
 
         // Init
         loadDevices();
