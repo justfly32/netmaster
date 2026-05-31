@@ -1,0 +1,32 @@
+# NetMaster Configuration
+# Copy and modify this file to customize your NetMaster settings.
+
+network:
+  scan_timeout: 30            # Network scan timeout (seconds)
+  ping_count: 4                # Default ping count
+  ping_timeout: 2              # Ping per-packet timeout (seconds, macOS: ms)
+  traceroute_max_hops: 30      # Max hops for traceroute
+  traceroute_timeout: 2        # Traceroute per-probe timeout (seconds)
+  snmp_community: public       # Default SNMP community string
+  snmp_timeout: 5              # SNMP query timeout (seconds)
+  dns_servers:                  # DNS servers for resolution
+    - 8.8.8.8
+    - 1.1.1.1
+  scan_threads: 50             # Concurrent scan threads
+
+ui:
+  host: 0.0.0.0                # Web UI bind address
+  port: 8080                   # Web UI port
+  debug: false                 # Enable Flask debug mode
+  refresh_interval: 5          # Dashboard refresh (seconds)
+
+alerts:
+  enabled: true
+  latency_threshold_ms: 100
+  packet_loss_threshold_pct: 10
+  device_down_alert: true
+
+topology:
+  auto_scan: true
+  scan_interval_minutes: 60
+  layout_algorithm: spring     # spring, circular, or shell

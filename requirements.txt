@@ -1,0 +1,38 @@
+# NetMaster — Network Management All-in-One Tool
+# requirements.txt
+
+# Core networking
+scapy>=2.5.0          # Packet crafting, ARP, ICMP
+python-nmap>=0.7.1    # Network scanning
+netaddr>=1.2.0        # IP address manipulation
+netifaces>=0.11.0     # Network interface info
+
+# DNS
+dnspython>=2.6.0      # DNS queries, reverse lookup
+
+# SNMP
+pysnmp>=4.4.12        # SNMP v1/v2c/v3
+pysnmp-mibs>=0.1.6    # Standard MIBs
+
+# SSH / Telnet
+paramiko>=3.4.0       # SSH client/server
+telnetlib3>=2.0.0     # Telnet client
+
+# Web UI
+flask>=3.0.0          # Web framework
+flask-socketio>=5.3.0 # WebSocket for real-time
+jinja2>=3.1.0         # Templates
+
+# Visualization
+networkx>=3.0         # Graph topology
+matplotlib>=3.8.0     # Chart generation
+
+# Async / Performance
+asyncio>=3.4.0        # Async I/O
+aiohttp>=3.9.0        # Async HTTP
+
+# Utils
+pyyaml>=6.0           # Config files
+rich>=13.7.0          # Terminal UI
+click>=8.1.0          # CLI
+psutil>=5.9.0         # System/network stats

@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetMaster — Network Management Dashboard</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.0/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0e17; color: #e0e6ed; }
+        .header { background: linear-gradient(135deg, #1a1f35 0%, #0d1117 100%); padding: 16px 24px; border-bottom: 1px solid #21262d; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 20px; color: #58a6ff; }
+        .header .status { display: flex; gap: 16px; font-size: 13px; }
+        .header .status span { color: #8b949e; }
+        .header .status .value { color: #58a6ff; font-weight: 600; }
+
+        .nav { background: #161b22; border-bottom: 1px solid #21262d; display: flex; gap: 4px; padding: 0 24px; }
+        .nav button { background: transparent; border: none; color: #8b949e; padding: 12px 20px; cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; transition: all .2s; }
+        .nav button:hover, .nav button.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+        .main { display: flex; height: calc(100vh - 100px); }
+        .sidebar { width: 320px; background: #161b22; border-right: 1px solid #21262d; overflow-y: auto; padding: 16px; font-size: 13px; }
+        .sidebar h3 { color: #58a6ff; margin-bottom: 12px; font-size: 14px; }
+        .sidebar .form-group { margin-bottom: 12px; }
+        .sidebar label { display: block; color: #8b949e; margin-bottom: 4px; }
+        .sidebar input, .sidebar select { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; color: #e0e6ed; border-radius: 6px; font-size: 13px; }
+        .sidebar input:focus { outline: none; border-color: #58a6ff; }
+        .sidebar button { width: 100%; padding: 10px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+        .sidebar button:hover { background: #2ea043; }
+        .sidebar button.secondary { background: #21262d; color: #8b949e; }
+        .sidebar button.secondary:hover { background: #30363d; }
+
+        .content { flex: 1; padding: 16px; overflow-y: auto; }
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        .card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .card h4 { color: #58a6ff; margin-bottom: 12px; font-size: 14px; }
+
+        /* Topology */
+        #topology-container { width: 100%; height: 600px; background: #0d1117; border-radius: 8px; overflow: hidden; position: relative; }
+        #topology-svg { width: 100%; height: 100%; }
+        .node circle { stroke: #fff; stroke-width: 2px; cursor: pointer; }
+        .node text { fill: #e0e6ed; font-size: 11px; pointer-events: none; }
+        .link { stroke: #30363d; stroke-width: 1.5px; }
+        .link-label { fill: #8b949e; font-size: 10px; }
+
+        /* Results */
+        .result-output { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px; font-family: 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; color: #7ee787; }
+
+        /* Device Table */
+        .device-table { width: 100%; border-collapse: collapse; }
+        .device-table th { text-align: left; padding: 10px 12px; color: #8b949e; border-bottom: 1px solid #21262d; font-size: 12px; }
+        .device-table td { padding: 10px 12px; border-bottom: 1px solid #21262d; font-size: 13px; }
+        .device-table tr:hover { background: #1c2128; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+        .badge.up { background: #238636; color: #fff; }
+        .badge.down { background: #da3633; color: #fff; }
+        .badge.server { background: #58a6ff22; color: #58a6ff; }
+        .badge.router { color: #f0883e; background: #f0883e22; }
+        .badge.switch { color: #a371f7; background: #a371f722; }
+
+        /* Stats Grid */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+        .stat-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; text-align: center; }
+        .stat-card .value { font-size: 28px; font-weight: 700; color: #58a6ff; }
+        .stat-card .label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+
+        /* Topology Legend */
+        .legend { position: absolute; bottom: 12px; right: 12px; background: #161b22ee; border: 1px solid #21262d; border-radius: 6px; padding: 8px 12px; font-size: 11px; }
+        .legend-item { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+        .legend-color { width: 12px; height: 12px; border-radius: 50%; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🌐 NetMaster</h1>
+        <div class="status">
+            <span>디바이스: <span class="value" id="device-count">0</span></span>
+            <span>알림: <span class="value" id="alert-count">0</span></span>
+            <span>모드: <span class="value">v0.1.0</span></span>
+        </div>
+    </div>
+
+    <div class="nav">
+        <button class="active" onclick="showPanel('dashboard')">📊 대시보드</button>
+        <button onclick="showPanel('discover')">🔍 네트워크 스캔</button>
+        <button onclick="showPanel('topology')">🗺️ 토폴로지</button>
+        <button onclick="showPanel('ping')">📡 Ping/Trace</button>
+        <button onclick="showPanel('dns')">🌐 DNS</button>
+        <button onclick="showPanel('snmp')">📋 SNMP</button>
+        <button onclick="showPanel('ssh')">🔐 SSH/Telnet</button>
+    </div>
+
+    <div class="main">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <h3>⚡ 빠른 실행</h3>
+            <div class="form-group">
+                <label>대상 호스트/IP</label>
+                <input type="text" id="quick-target" placeholder="192.168.1.1 또는 google.com">
+            </div>
+            <button onclick="quickPing()">Ping</button>
+            <button class="secondary" onclick="quickTrace()">Traceroute</button>
+            <button class="secondary" onclick="quickDNS()">DNS Lookup</button>
+            <button class="secondary" onclick="quickScan()">네트워크 스캔</button>
+
+            <h3 style="margin-top:24px">📊 스캔 설정</h3>
+            <div class="form-group">
+                <label>서브넷</label>
+                <input type="text" id="scan-subnet" placeholder="192.168.1.0/24">
+            </div>
+            <div class="form-group">
+                <label>스캔 타입</label>
+                <select id="scan-type">
+                    <option value="arp">ARP Scan</option>
+                    <option value="ping">Ping Sweep</option>
+                    <option value="full">Full Discovery</option>
+                    <option value="nmap">Nmap Scan</option>
+                </select>
+            </div>
+            <button onclick="startScan()" style="background:#238636">▶ 스캔 시작</button>
+            <button class="secondary" onclick="loadDevices()">디바이스 새로고침</button>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+            <!-- Dashboard Panel -->
+            <div id="panel-dashboard" class="panel active">
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="value" id="stat-devices">0</div><div class="label">발견된 디바이스</div></div>
+                    <div class="stat-card"><div class="value" id="stat-online">0</div><div class="label">온라인</div></div>
+                    <div class="stat-card"><div class="value" id="stat-servers">0</div><div class="label">서버</div></div>
+                    <div class="stat-card"><div class="value" id="stat-routers">0</div><div class="label">라우터/스위치</div></div>
+                    <div class="stat-card"><div class="value" id="stat-alerts">0</div><div class="label">알림</div></div>
+                </div>
+                <div class="card">
+                    <h4>📋 디바이스 목록</h4>
+                    <table class="device-table">
+                        <thead><tr><th>IP</th><th>MAC</th><th>호스트명</th><th>타입</th><th>상태</th><th>벤더</th></tr></thead>
+                        <tbody id="device-table-body"><tr><td colspan="6" style="text-align:center;color:#8b949e">스캔을 시작하세요</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Topology Panel -->
+            <div id="panel-topology" class="panel">
+                <div class="card">
+                    <h4>🗺️ 네트워크 토폴로지 맵</h4>
+                    <div id="topology-container">
+                        <svg id="topology-svg"></svg>
+                        <div class="legend">
+                            <div class="legend-item"><div class="legend-color" style="background:#58a6ff"></div>라우터</div>
+                            <div class="legend-item"><div class="legend-color" style="background:#a371f7"></div>스위치</div>
+                            <div class="legend-item"><div class="legend-color" style="background:#238636"></div>서버</div>
+                            <div class="legend-item"><div class="legend-color" style="background:#d29922"></div>호스트</div>
+                            <div class="legend-item"><div class="legend-color" style="background:#da3633"></div>방화벽</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ping/Trace Panel -->
+            <div id="panel-ping" class="panel">
+                <div class="card">
+                    <h4>📡 Ping</h4>
+                    <div style="display:flex;gap:8px;margin-bottom:12px">
+                        <input type="text" id="ping-host" placeholder="호스트/IP" style="flex:1">
+                        <input type="number" id="ping-count" value="4" min="1" max="100" style="width:80px">
+                        <button onclick="doPing()">실행</button>
+                    </div>
+                    <div class="result-output" id="ping-result">결과가 여기에 표시됩니다</div>
+                </div>
+                <div class="card">
+                    <h4>🛤️ Traceroute</h4>
+                    <div style="display:flex;gap:8px;margin-bottom:12px">
+                        <input type="text" id="trace-host" placeholder="호스트/IP" style="flex:1">
+                        <input type="number" id="trace-hops" value="15" min="1" max="64" style="width:80px">
+                        <button onclick="doTrace()">실행</button>
+                    </div>
+                    <div class="result-output" id="trace-result">결과가 여기에 표시됩니다</div>
+                </div>
+            </div>
+
+            <!-- DNS Panel -->
+            <div id="panel-dns" class="panel">
+                <div class="card">
+                    <h4>🌐 DNS Lookup</h4>
+                    <div style="display:flex;gap:8px;margin-bottom:12px">
+                        <input type="text" id="dns-domain" placeholder="도메인 (예: google.com)" style="flex:1">
+                        <select id="dns-type">
+                            <option value="A">A</option>
+                            <option value="AAAA">AAAA</option>
+                            <option value="CNAME">CNAME</option>
+                            <option value="MX">MX</option>
+                            <option value="NS">NS</option>
+                            <option value="TXT">TXT</option>
+                            <option value="SOA">SOA</option>
+                        </select>
+                        <button onclick="doDNS()">조회</button>
+                    </div>
+                    <div class="result-output" id="dns-result">결과가 여기에 표시됩니다</div>
+                </div>
+            </div>
+
+            <!-- SNMP Panel -->
+            <div id="panel-snmp" class="panel">
+                <div class="card">
+                    <h4>📋 SNMP Query</h4>
+                    <div class="form-group">
+                        <label>호스트</label>
+                        <input type="text" id="snmp-host" placeholder="192.168.1.1">
+                    </div>
+                    <div class="form-group">
+                        <label>OID</label>
+                        <input type="text" id="snmp-oid" value="1.3.6.1.2.1.1.1.0" placeholder="1.3.6.1.2.1.1.1.0">
+                    </div>
+                    <div class="form-group">
+                        <label>Community</label>
+                        <input type="text" id="snmp-community" value="public" placeholder="public">
+                    </div>
+                    <button onclick="doSNMP()">SNMP Get</button>
+                    <button class="secondary" onclick="doSNMPWalk()" style="margin-left:8px">SNMP Walk</button>
+                    <button class="secondary" onclick="doSNMPInfo()" style="margin-left:8px">시스템 정보</button>
+                    <div class="result-output" id="snmp-result" style="margin-top:12px">결과가 여기에 표시됩니다</div>
+                </div>
+            </div>
+
+            <!-- SSH Panel -->
+            <div id="panel-ssh" class="panel">
+                <div class="card">
+                    <h4>🔐 SSH / Telnet</h4>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+                        <input type="text" id="ssh-host" placeholder="호스트/IP">
+                        <input type="text" id="ssh-user" placeholder="사용자명" value="root">
+                        <input type="password" id="ssh-pass" placeholder="비밀번호">
+                        <input type="number" id="ssh-port" value="23" placeholder="포트 (22=SSH, 23=Telnet)">
+                    </div>
+                    <div class="form-group">
+                        <label>실행할 명령</label>
+                        <input type="text" id="ssh-cmd" value="uname -a" placeholder="uname -a">
+                    </div>
+                    <button onclick="doSSH()">SSH 실행</button>
+                    <button class="secondary" onclick="doTelnet()" style="margin-left:8px">Telnet 실행</button>
+                    <div class="result-output" id="ssh-result" style="margin-top:12px">결과가 여기에 표시됩니다</div>
+                </div>
+            </div>
+
+            <!-- Discover Panel -->
+            <div id="panel-discover" class="panel">
+                <div class="card">
+                    <h4>🔍 네트워크 디바이스 발견</h4>
+                    <div id="discover-results"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let devices = {};
+        let activePanel = 'dashboard';
+
+        // Panel switching
+        function showPanel(name) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+            document.getElementById('panel-' + name).classList.add('active');
+            event.target.classList.add('active');
+            activePanel = name;
+            if (name === 'topology') drawTopology();
+        }
+
+        // API helpers
+        async function apiPost(path, data) {
+            const res = await fetch('/api' + path, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+            });
+            return res.json();
+        }
+
+        async function apiGet(path) {
+            const res = await fetch('/api' + path);
+            return res.json();
+        }
+
+        // Ping
+        async function doPing() {
+            const host = document.getElementById('ping-host').value;
+            const count = parseInt(document.getElementById('ping-count').value);
+            const el = document.getElementById('ping-result');
+            el.textContent = '실행 중...';
+            try {
+                const res = await apiPost('/ping', {host, count});
+                el.textContent = JSON.stringify(res, null, 2);
+            } catch (e) { el.textContent = '오류: ' + e; }
+        }
+
+        // Traceroute
+        async function doTrace() {
+            const host = document.getElementById('trace-host').value;
+            const max_hops = parseInt(document.getElementById('trace-hops').value);
+            const el = document.getElementById('trace-result');
+            el.textContent = '실행 중...';
+            try {
+                const res = await apiPost('/traceroute', {host, max_hops});
+                el.textContent = JSON.stringify(res, null, 2);
+            } catch (e) { el.textContent = '오류: ' + e; }
+        }
+
+        // DNS
+        async function doDNS() {
+            const domain = document.getElementById('dns-domain').value;
+            const type = document.getElementById('dns-type').value;
+            const el = document.getElementById('dns-result');
+            el.textContent = '조회 중...';
+            try {
+                const res = await apiPost('/dns', {domain, type});
+                el.textContent = JSON.stringify(res, null, 2);
+            } catch (e) { el.textContent = '오류: ' + e; }
+        }
+
+        // SNMP
+        async function doSNMP() {
+            const host = document.getElementById('snmp-host').value;
+            const oid = document.getElementById('snmp-oid').value;
+            const community = document.getElementById('snmp-community').value;
+            const el = document.getElementById('snmp-result');
+            el.textContent = '쿼리 중...';
+            try {
+                const res = await apiPost('/snmp', {host, oid, community});
+                el.textContent = JSON.stringify(res, null, 2);
+            } catch (e) { el.textContent = '오류: ' + e; }
+        }
+
+        // SSH
+        async function doSSH() {
+            const host = document.getElementById('ssh-host').value;
+            const username = document.getElementById('ssh-user').value;
+            const password = document.getElementById('ssh-pass').value;
+            const port = parseInt(document.getElementById('ssh-port').value);
+            const command = document.getElementById('ssh-cmd').value;
+            const el = document.getElementById('ssh-result');
+            el.textContent = '연결 중...';
+            try {
+                const res = await apiPost('/ssh', {host, username, password, port, command});
+                el.textContent = JSON.stringify(res, null, 2);
+            } catch (e) { el.textContent = '오류: ' + e; }
+        }
+
+        // Telnet
+        async function doTelnet() {
+            const host = document.getElementById('ssh-host').value;
+            const port = parseInt(document.getElementById('ssh-port').value) || 23;
+            const el = document.getElementById('ssh-result');
+            el.textContent = '연결 중...';
+            try {
+                const res = await apiPost('/ssh', {host, username: '', port, command: ''});
+                el.textContent = JSON.stringify(res, null, 2);
+            } catch (e) { el.textContent = '오류: ' + e; }
+        }
+
+        // Scan
+        async function startScan() {
+            const subnet = document.getElementById('scan-subnet').value;
+            const discoverResults = document.getElementById('discover-results');
+            discoverResults.innerHTML = '<p style="color:#58a6ff">스캔 중...</p>';
+            try {
+                const res = await apiPost('/discover', {subnet});
+                devices = res;
+                updateDeviceTable();
+                updateStats();
+                discoverResults.innerHTML = '<pre class="result-output">' + JSON.stringify(res, null, 2) + '</pre>';
+            } catch (e) {
+                discoverResults.innerHTML = '<p style="color:#da3633">오류: ' + e + '</p>';
+            }
+        }
+
+        async function loadDevices() {
+            try {
+                devices = await apiGet('/devices');
+                updateDeviceTable();
+                updateStats();
+            } catch (e) {}
+        }
+
+        // Quick actions
+        function quickPing() { const t = document.getElementById('quick-target').value; document.getElementById('ping-host').value = t; showPanelByName('ping'); doPing(); }
+        function quickTrace() { const t = document.getElementById('quick-target').value; document.getElementById('trace-host').value = t; showPanelByName('ping'); doTrace(); }
+        function quickDNS() { const t = document.getElementById('quick-target').value; document.getElementById('dns-domain').value = t; showPanelByName('dns'); doDNS(); }
+        function quickScan() { showPanelByName('discover'); startScan(); }
+        function showPanelByName(name) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+            document.getElementById('panel-' + name).classList.add('active');
+        }
+
+        function updateDeviceTable() {
+            const tbody = document.getElementById('device-table-body');
+            const ips = Object.keys(devices);
+            if (ips.length === 0) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#8b949e">디바이스 없음</td></tr>'; return; }
+            tbody.innerHTML = ips.map(ip => {
+                const d = devices[ip];
+                const type = d.type || d.ports ? 'server' : 'host';
+                return `<tr>
+                    <td>${ip}</td>
+                    <td>${d.mac || '-'}</td>
+                    <td>${d.hostname || '-'}</td>
+                    <td><span class="badge ${type}">${type}</span></td>
+                    <td><span class="badge ${d.status === 'up' ? 'up' : 'down'}">${d.status || 'unknown'}</span></td>
+                    <td>${d.vendor || '-'}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function updateStats() {
+            const ips = Object.keys(devices);
+            document.getElementById('device-count').textContent = ips.length;
+            document.getElementById('stat-devices').textContent = ips.length;
+            document.getElementById('stat-online').textContent = ips.filter(ip => devices[ip].status === 'up').length;
+            document.getElementById('stat-servers').textContent = ips.filter(ip => (devices[ip].type || '') === 'server').length;
+            document.getElementById('stat-routers').textContent = ips.filter(ip => { const t = devices[ip].type || ''; return t === 'router' || t === 'switch'; }).length;
+        }
+
+        // D3 topology drawing
+        function drawTopology() {
+            const container = document.getElementById('topology-container');
+            const svg = d3.select('#topology-svg');
+            svg.selectAll('*').remove();
+
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            const ips = Object.keys(devices);
+            if (ips.length === 0) {
+                svg.append('text').attr('x', width/2).attr('y', height/2)
+                    .attr('fill', '#8b949e').attr('text-anchor', 'middle')
+                    .text('스캔 후 토폴로지를 확인하세요');
+                return;
+            }
+
+            const nodes = ips.map(ip => ({ id: ip, ip, type: devices[ip].type || 'host', hostname: devices[ip].hostname || ip }));
+            const links = [];
+            for (let i = 0; i < ips.length; i++) {
+                for (let j = i + 1; j < ips.length; j++) {
+                    links.push({ source: ips[i], target: ips[j] });
+                }
+            }
+
+            const colorMap = { router: '#58a6ff', switch: '#a371f7', server: '#238636', host: '#d29922', firewall: '#da3633', unknown: '#8b949e' };
+
+            const simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(100))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(width/2, height/2));
+
+            const link = svg.append('g').selectAll('line').data(links).enter().append('line')
+                .attr('class', 'link').attr('stroke', '#30363d').attr('stroke-width', 1);
+
+            const node = svg.append('g').selectAll('g').data(nodes).enter().append('g').attr('class', 'node').call(d3.drag());
+
+            node.append('circle').attr('r', d => d.type === 'router' ? 12 : d.type === 'server' ? 10 : 8)
+                .attr('fill', d => colorMap[d.type] || colorMap.unknown);
+
+            node.append('text').attr('dx', 14).attr('dy', 4)
+                .text(d => d.hostname.length > 15 ? d.hostname.slice(0, 15) + '...' : d.hostname);
+
+            simulation.on('tick', () => {
+                link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+        }
+
+        // Init
+        loadDevices();
+    </script>
+</body>
+</html>
